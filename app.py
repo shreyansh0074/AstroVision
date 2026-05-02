@@ -8,11 +8,12 @@ import torch
 import torch.nn as nn
 from pathlib import Path
 from collections import Counter
-import pickle
+import sys
+import types
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# CBAM CLASSES (same as training)
+# CBAM CLASSES (same as training file)
 # ══════════════════════════════════════════════════════════════════════════════
 
 class ChannelAttention(nn.Module):
@@ -63,33 +64,25 @@ class CBAM(nn.Module):
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# 🔥 CUSTOM UNPICKLER (FINAL FIX)
+# ✅ CRITICAL FIX: Register CBAM module for torch.load
 # ══════════════════════════════════════════════════════════════════════════════
 
-class CustomUnpickler(pickle.Unpickler):
-    def find_class(self, module, name):
-        if name == "CBAM":
-            return CBAM
-        if name == "ChannelAttention":
-            return ChannelAttention
-        if name == "SpatialAttention":
-            return SpatialAttention
-        return super().find_class(module, name)
+cbam_module = types.ModuleType("cbam")
+cbam_module.CBAM = CBAM
+cbam_module.ChannelAttention = ChannelAttention
+cbam_module.SpatialAttention = SpatialAttention
 
-
-def patched_load(file, *args, **kwargs):
-    kwargs["weights_only"] = False
-    with open(file, "rb") as f:
-        return CustomUnpickler(f).load()
+# Only safe mappings (DO NOT override ultralytics modules)
+sys.modules["cbam"] = cbam_module
+sys.modules["models.common"] = cbam_module
+sys.modules["__main__"] = cbam_module
 
 
 # ══════════════════════════════════════════════════════════════════════════════
 # IMPORT ULTRALYTICS
 # ══════════════════════════════════════════════════════════════════════════════
 
-import ultralytics
 from ultralytics import YOLO
-
 
 # Inject CBAM into ultralytics safely
 import ultralytics.nn.modules as _ult_modules
@@ -115,7 +108,7 @@ CLASS_INFO = {
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# MODEL LOADING
+# MODEL LOADING (clean, no hacks)
 # ══════════════════════════════════════════════════════════════════════════════
 
 @st.cache_resource
@@ -126,15 +119,7 @@ def load_model():
         st.error("Model file 'best_fixed.pt' not found.")
         st.stop()
 
-    # Patch torch.load
-    original_load = torch.load
-    torch.load = patched_load
-
-    try:
-        model = YOLO(str(model_path), task="detect")
-    finally:
-        torch.load = original_load
-
+    model = YOLO(str(model_path), task="detect")
     return model
 
 
@@ -185,7 +170,10 @@ if uploaded_file:
             confs = [c for cid, c in detected_data if cid == cls_id]
 
             st.markdown(f"**{info['name']}** — {count} detected")
-            st.caption(f"Avg confidence: {sum(confs)/len(confs):.2f} | Max confidence: {max(confs):.2f}")
+            st.caption(
+                f"Avg confidence: {sum(confs)/len(confs):.2f} | "
+                f"Max confidence: {max(confs):.2f}"
+            )
 
             if info["description"]:
                 st.caption(info["description"])
