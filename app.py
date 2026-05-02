@@ -4,7 +4,6 @@ import numpy as np
 import torch
 import torch.nn as nn
 from ultralytics import YOLO
-import cv2
 from collections import Counter
 from pathlib import Path
 
@@ -120,7 +119,7 @@ model = load_model()
 
 st.set_page_config(page_title="AstroVision", layout="centered")
 
-st.title("🔭 AstroVision")
+st.title("AstroVision")
 st.write("Upload an astronomical image to detect objects.")
 
 st.divider()
@@ -136,7 +135,7 @@ if uploaded_file is not None:
     with st.spinner("Detecting objects..."):
         results = model.predict(img_array, conf=0.25, device="cpu")
 
-    annotated_img = cv2.cvtColor(results[0].plot(), cv2.COLOR_BGR2RGB)
+    annotated_img = results[0].plot()[..., ::-1]  # BGR to RGB without cv2
     st.image(annotated_img, caption="Detection Output", use_container_width=True)
 
     st.divider()
