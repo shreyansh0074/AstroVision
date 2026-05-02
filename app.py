@@ -27,10 +27,17 @@ CLASS_INFO = {
     },
 }
 
+import urllib.request
+from pathlib import Path
+
+weights = Path(__file__).parent / "best_fixed.pt"
+if not weights.exists():
+    url = "https://github.com/YOUR_USERNAME/astrovision/releases/download/v1.0/best_fixed.pt"
+    with st.spinner("Downloading model weights..."):
+        urllib.request.urlretrieve(url, weights)
+
 # ── Model loading ──────────────────────────────────────────────────────────────
-# @st.cache_resource ensures the model loads only ONCE across all reruns.
-# Without this, Streamlit reloads the model on every interaction — very slow.
-# Path is relative to app.py so it works locally and on Streamlit Cloud.
+
 @st.cache_resource
 def load_model():
     model_path = Path(__file__).parent / "best_fixed.pt"
