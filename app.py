@@ -72,17 +72,9 @@ cbam_module.CBAM = CBAM
 cbam_module.ChannelAttention = ChannelAttention
 cbam_module.SpatialAttention = SpatialAttention
 
-# Register under multiple possible names (important!)
-for name in [
-    "cbam",
-    "models.common",
-    "models.cbam",
-    "ultralytics.nn.modules.block",
-    "ultralytics.nn.modules",
-    "__main__"
-]:
-    sys.modules[name] = cbam_module
-
+sys.modules["cbam"] = cbam_module
+sys.modules["models.common"] = cbam_module
+sys.modules["__main__"] = cbam_module
 
 # ══════════════════════════════════════════════════════════════════════════════
 # IMPORT ULTRALYTICS AFTER CBAM REGISTRATION
