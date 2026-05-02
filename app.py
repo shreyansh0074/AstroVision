@@ -87,6 +87,7 @@ for _mod_name in [
         setattr(sys.modules[_mod_name], "SpatialAttention", SpatialAttention)
 
 # Now safe to import ultralytics
+import ultralytics
 from ultralytics import YOLO
 import ultralytics.nn.modules as _ult_modules
 import ultralytics.nn.modules.block as _ult_block
