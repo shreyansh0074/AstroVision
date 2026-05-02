@@ -1,6 +1,3 @@
-# AstroVision — Streamlit Cloud deployment dependencies
-# Streamlit Cloud runs Python 3.10 on Linux (CPU only)
-
 streamlit==1.32.0
 ultralytics==8.1.0
 torch==2.2.2
