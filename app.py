@@ -28,24 +28,14 @@ CLASS_INFO = {
 }
 
 import urllib.request
+
 from pathlib import Path
-
-weights = Path(__file__).parent / "best_fixed.pt"
-if not weights.exists():
-    url = "https://github.com/shreyansh0074/AstroVision/releases/download/v1.0/best_fixed.pt"
-    with st.spinner("Downloading model weights..."):
-        urllib.request.urlretrieve(url, weights)
-
-# ── Model loading ──────────────────────────────────────────────────────────────
 
 @st.cache_resource
 def load_model():
     model_path = Path(__file__).parent / "best_fixed.pt"
     if not model_path.exists():
-        st.error(
-            f"Model file not found: `{model_path}`\n\n"
-            "Make sure `best_fixed.pt` is in the same folder as `app.py`."
-        )
+        st.error("Model file not found: `best_fixed.pt`")
         st.stop()
     return YOLO(str(model_path))
 
