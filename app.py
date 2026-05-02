@@ -32,7 +32,7 @@ from pathlib import Path
 
 weights = Path(__file__).parent / "best_fixed.pt"
 if not weights.exists():
-    url = "https://github.com/YOUR_USERNAME/astrovision/releases/download/v1.0/best_fixed.pt"
+    url = "https://github.com/shreyansh0074/AstroVision/releases/download/v1.0/best_fixed.pt"
     with st.spinner("Downloading model weights..."):
         urllib.request.urlretrieve(url, weights)
 
