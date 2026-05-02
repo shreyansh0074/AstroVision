@@ -60,6 +60,20 @@ class CBAM(nn.Module):
         return self.spatial_att(self.channel_att(x))
 
 
+import sys
+import types
+
+# Create a fake module named "cbam"
+cbam_module = types.ModuleType("cbam")
+
+# Attach your classes to it
+cbam_module.CBAM = CBAM
+cbam_module.ChannelAttention = ChannelAttention
+cbam_module.SpatialAttention = SpatialAttention
+
+# Register it so torch.load can find it
+sys.modules["cbam"] = cbam_module
+
 # ══════════════════════════════════════════════════════════════════════════════
 # Import ultralytics AFTER defining CBAM
 # ══════════════════════════════════════════════════════════════════════════════
