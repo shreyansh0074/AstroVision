@@ -3,13 +3,12 @@ from PIL import Image
 import numpy as np
 import torch
 import torch.nn as nn
-from ultralytics import YOLO
-from collections import Counter
 from pathlib import Path
+from collections import Counter
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# CBAM — must be defined AND registered BEFORE any YOLO import touches weights
+# CBAM classes — defined first, before any ultralytics import
 # ══════════════════════════════════════════════════════════════════════════════
 
 class ChannelAttention(nn.Module):
@@ -41,7 +40,7 @@ class SpatialAttention(nn.Module):
 
     def forward(self, x):
         avg = x.mean(dim=1, keepdim=True)
-        mx  = x.max(dim=1,  keepdim=True).values
+        mx  = x.max(dim=1, keepdim=True).values
         return x * self.sigmoid(self.conv(torch.cat([avg, mx], dim=1)))
 
 
@@ -55,24 +54,52 @@ class CBAM(nn.Module):
         return self.spatial_att(self.channel_att(x))
 
 
-# ── Register CBAM in every place ultralytics looks for custom modules ──────────
+# ══════════════════════════════════════════════════════════════════════════════
+# Patch torch's unpickler BEFORE ultralytics is imported
+# This is the only reliable way to make custom classes loadable from .pt files
+# ══════════════════════════════════════════════════════════════════════════════
+
+import sys
+import importlib
+
+# Create a fake module that torch's pickle can resolve CBAM from
+class _FakeModule:
+    pass
+
+_fake = _FakeModule()
+_fake.CBAM             = CBAM
+_fake.ChannelAttention = ChannelAttention
+_fake.SpatialAttention = SpatialAttention
+
+# Register under every module name the checkpoint might reference
+for _mod_name in [
+    "ultralytics.nn.modules",
+    "ultralytics.nn.modules.block",
+    "ultralytics.nn.tasks",
+    "models.common",       # older ultralytics checkpoints
+    "__main__",
+]:
+    if _mod_name not in sys.modules:
+        sys.modules[_mod_name] = _fake
+    else:
+        setattr(sys.modules[_mod_name], "CBAM",             CBAM)
+        setattr(sys.modules[_mod_name], "ChannelAttention", ChannelAttention)
+        setattr(sys.modules[_mod_name], "SpatialAttention", SpatialAttention)
+
+# Now safe to import ultralytics
+from ultralytics import YOLO
 import ultralytics.nn.modules as _ult_modules
 import ultralytics.nn.modules.block as _ult_block
 import ultralytics.nn.tasks as _ult_tasks
 
-for _registry in (_ult_modules, _ult_block, _ult_tasks):
-    setattr(_registry, "CBAM",             CBAM)
-    setattr(_registry, "ChannelAttention", ChannelAttention)
-    setattr(_registry, "SpatialAttention", SpatialAttention)
-
-import sys as _sys
-_sys.modules[__name__].CBAM             = CBAM
-_sys.modules[__name__].ChannelAttention = ChannelAttention
-_sys.modules[__name__].SpatialAttention = SpatialAttention
+for _reg in (_ult_modules, _ult_block, _ult_tasks):
+    setattr(_reg, "CBAM",             CBAM)
+    setattr(_reg, "ChannelAttention", ChannelAttention)
+    setattr(_reg, "SpatialAttention", SpatialAttention)
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# Class label mapping  (0=comet, 1=galaxy, 2=globular_cluster, 3=nebula)
+# Class label mapping
 # ══════════════════════════════════════════════════════════════════════════════
 
 CLASS_INFO = {
@@ -96,19 +123,29 @@ CLASS_INFO = {
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# Model loading — cached so it only runs once per Streamlit session
+# Model loading
 # ══════════════════════════════════════════════════════════════════════════════
 
 @st.cache_resource
 def load_model():
     model_path = Path(__file__).parent / "best_fixed.pt"
     if not model_path.exists():
-        st.error(
-            "**Model file not found:** `best_fixed.pt`\n\n"
-            "Make sure it is committed to the repo in the same folder as `app.py`."
-        )
+        st.error("**Model file not found:** `best_fixed.pt` — make sure it is committed to the repo.")
         st.stop()
-    return YOLO(str(model_path))
+
+    # Patch safe_load to allow our custom classes
+    original_load = torch.load
+    def patched_load(*args, **kwargs):
+        kwargs["weights_only"] = False
+        return original_load(*args, **kwargs)
+
+    torch.load = patched_load
+    try:
+        mdl = YOLO(str(model_path))
+    finally:
+        torch.load = original_load  # always restore
+
+    return mdl
 
 model = load_model()
 
@@ -118,10 +155,8 @@ model = load_model()
 # ══════════════════════════════════════════════════════════════════════════════
 
 st.set_page_config(page_title="AstroVision", layout="centered")
-
-st.title("AstroVision")
+st.title("🔭 AstroVision")
 st.write("Upload an astronomical image to detect objects.")
-
 st.divider()
 
 uploaded_file = st.file_uploader("Upload Image", type=["jpg", "jpeg", "png"])
@@ -135,7 +170,8 @@ if uploaded_file is not None:
     with st.spinner("Detecting objects..."):
         results = model.predict(img_array, conf=0.25, device="cpu")
 
-    annotated_img = results[0].plot()[..., ::-1]  # BGR to RGB without cv2
+    # BGR → RGB without cv2
+    annotated_img = results[0].plot()[..., ::-1]
     st.image(annotated_img, caption="Detection Output", use_container_width=True)
 
     st.divider()
@@ -165,6 +201,5 @@ if uploaded_file is not None:
 
         st.divider()
         st.caption(f"Total objects detected: {len(detected_data)}")
-
     else:
         st.info("No objects detected. Try a clearer image or a lower confidence threshold.")
