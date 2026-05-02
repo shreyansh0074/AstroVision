@@ -8,74 +8,84 @@ import torch
 import torch.nn as nn
 from pathlib import Path
 from collections import Counter
+import sys
+import types
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# CBAM classes
+# CBAM CLASSES
 # ══════════════════════════════════════════════════════════════════════════════
 
 class ChannelAttention(nn.Module):
-    def __init__(self, in_channels, reduction_ratio=16):
+    def __init__(self, channels, reduction=16):
         super().__init__()
-        hidden = max(1, in_channels // reduction_ratio)
         self.avg_pool = nn.AdaptiveAvgPool2d(1)
         self.max_pool = nn.AdaptiveMaxPool2d(1)
-        self.shared_mlp = nn.Sequential(
-            nn.Conv2d(in_channels, hidden, 1, bias=False),
+
+        self.mlp = nn.Sequential(
+            nn.Conv2d(channels, channels // reduction, 1, bias=False),
             nn.ReLU(inplace=True),
-            nn.Conv2d(hidden, in_channels, 1, bias=False),
+            nn.Conv2d(channels // reduction, channels, 1, bias=False)
         )
+
         self.sigmoid = nn.Sigmoid()
 
     def forward(self, x):
-        return x * self.sigmoid(
-            self.shared_mlp(self.avg_pool(x)) +
-            self.shared_mlp(self.max_pool(x))
-        )
+        avg_out = self.mlp(self.avg_pool(x))
+        max_out = self.mlp(self.max_pool(x))
+        return self.sigmoid(avg_out + max_out)
 
 
 class SpatialAttention(nn.Module):
     def __init__(self, kernel_size=7):
         super().__init__()
-        self.conv = nn.Conv2d(
-            2, 1, kernel_size,
-            padding=(kernel_size - 1) // 2,
-            bias=False
-        )
+        padding = kernel_size // 2
+        self.conv = nn.Conv2d(2, 1, kernel_size, padding=padding, bias=False)
         self.sigmoid = nn.Sigmoid()
 
     def forward(self, x):
-        avg = x.mean(dim=1, keepdim=True)
-        mx = x.max(dim=1, keepdim=True).values
-        return x * self.sigmoid(self.conv(torch.cat([avg, mx], dim=1)))
+        avg_out = torch.mean(x, dim=1, keepdim=True)
+        max_out, _ = torch.max(x, dim=1, keepdim=True)
+        x = torch.cat([avg_out, max_out], dim=1)
+        x = self.conv(x)
+        return self.sigmoid(x)
 
 
 class CBAM(nn.Module):
-    def __init__(self, in_channels, reduction_ratio=16, kernel_size=7):
+    def __init__(self, channels, reduction=16, kernel_size=7):
         super().__init__()
-        self.channel_att = ChannelAttention(in_channels, reduction_ratio)
-        self.spatial_att = SpatialAttention(kernel_size)
+        self.channel = ChannelAttention(channels, reduction)
+        self.spatial = SpatialAttention(kernel_size)
 
     def forward(self, x):
-        return self.spatial_att(self.channel_att(x))
+        x = x * self.channel(x)
+        x = x * self.spatial(x)
+        return x
 
 
-import sys
-import types
+# ══════════════════════════════════════════════════════════════════════════════
+# 🔥 CRITICAL FIX: Register CBAM module for torch.load
+# ══════════════════════════════════════════════════════════════════════════════
 
-# Create a fake module named "cbam"
 cbam_module = types.ModuleType("cbam")
-
-# Attach your classes to it
 cbam_module.CBAM = CBAM
 cbam_module.ChannelAttention = ChannelAttention
 cbam_module.SpatialAttention = SpatialAttention
 
-# Register it so torch.load can find it
-sys.modules["cbam"] = cbam_module
+# Register under multiple possible names (important!)
+for name in [
+    "cbam",
+    "models.common",
+    "models.cbam",
+    "ultralytics.nn.modules.block",
+    "ultralytics.nn.modules",
+    "__main__"
+]:
+    sys.modules[name] = cbam_module
+
 
 # ══════════════════════════════════════════════════════════════════════════════
-# Import ultralytics AFTER defining CBAM
+# IMPORT ULTRALYTICS AFTER CBAM REGISTRATION
 # ══════════════════════════════════════════════════════════════════════════════
 
 import ultralytics
@@ -85,7 +95,7 @@ import ultralytics.nn.modules as _ult_modules
 import ultralytics.nn.modules.block as _ult_block
 import ultralytics.nn.tasks as _ult_tasks
 
-# SAFE injection (no overwriting)
+# Inject CBAM safely
 for _reg in (_ult_modules, _ult_block, _ult_tasks):
     setattr(_reg, "CBAM", CBAM)
     setattr(_reg, "ChannelAttention", ChannelAttention)
@@ -93,31 +103,19 @@ for _reg in (_ult_modules, _ult_block, _ult_tasks):
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# Class label mapping
+# CLASS INFO
 # ══════════════════════════════════════════════════════════════════════════════
 
 CLASS_INFO = {
-    0: {
-        "name": "Comet",
-        "description": "A small icy body that releases gas or dust when near the sun."
-    },
-    1: {
-        "name": "Galaxy",
-        "description": "A massive system of stars and dark matter."
-    },
-    2: {
-        "name": "Globular Cluster",
-        "description": "A dense cluster of old stars orbiting a galaxy."
-    },
-    3: {
-        "name": "Nebula",
-        "description": "A cloud of gas and dust where stars form."
-    },
+    0: {"name": "Comet", "description": "A small icy body with a glowing tail."},
+    1: {"name": "Galaxy", "description": "A massive system of stars and dark matter."},
+    2: {"name": "Globular Cluster", "description": "A dense cluster of old stars."},
+    3: {"name": "Nebula", "description": "A cloud where stars are formed."},
 }
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# Model loading
+# MODEL LOADING
 # ══════════════════════════════════════════════════════════════════════════════
 
 @st.cache_resource
@@ -128,7 +126,6 @@ def load_model():
         st.error("Model file 'best_fixed.pt' not found.")
         st.stop()
 
-    # Allow custom layers during load
     original_load = torch.load
 
     def patched_load(*args, **kwargs):
@@ -160,17 +157,17 @@ st.divider()
 
 uploaded_file = st.file_uploader("Upload Image", type=["jpg", "jpeg", "png"])
 
-if uploaded_file is not None:
+if uploaded_file:
     image = Image.open(uploaded_file).convert("RGB")
     img_array = np.array(image)
 
     st.image(image, caption="Input Image", use_container_width=True)
 
-    with st.spinner("Detecting objects..."):
+    with st.spinner("Detecting..."):
         results = model.predict(img_array, conf=0.25, device="cpu")
 
-    annotated_img = results[0].plot()[..., ::-1]
-    st.image(annotated_img, caption="Detection Output", use_container_width=True)
+    annotated = results[0].plot()[..., ::-1]
+    st.image(annotated, caption="Detection Output", use_container_width=True)
 
     st.divider()
     st.subheader("Detected Objects")
@@ -189,12 +186,10 @@ if uploaded_file is not None:
                 "description": ""
             })
 
-            confidences = [c for cid, c in detected_data if cid == cls_id]
-            avg_conf = sum(confidences) / len(confidences)
-            max_conf = max(confidences)
+            confs = [c for cid, c in detected_data if cid == cls_id]
 
             st.markdown(f"**{info['name']}** — {count} detected")
-            st.caption(f"Avg confidence: {avg_conf:.2f} | Max confidence: {max_conf:.2f}")
+            st.caption(f"Avg confidence: {sum(confs)/len(confs):.2f} | Max confidence: {max(confs):.2f}")
 
             if info["description"]:
                 st.caption(info["description"])
@@ -202,4 +197,4 @@ if uploaded_file is not None:
         st.divider()
         st.caption(f"Total objects detected: {len(detected_data)}")
     else:
-        st.info("No objects detected. Try another image or lower confidence.")
+        st.info("No objects detected.")
