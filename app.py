@@ -8,12 +8,11 @@ import torch
 import torch.nn as nn
 from pathlib import Path
 from collections import Counter
-import sys
-import types
+import pickle
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# CBAM CLASSES
+# CBAM CLASSES (same as training)
 # ══════════════════════════════════════════════════════════════════════════════
 
 class ChannelAttention(nn.Module):
@@ -64,30 +63,39 @@ class CBAM(nn.Module):
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# 🔥 CRITICAL FIX: Register CBAM module for torch.load
+# 🔥 CUSTOM UNPICKLER (FINAL FIX)
 # ══════════════════════════════════════════════════════════════════════════════
 
-cbam_module = types.ModuleType("cbam")
-cbam_module.CBAM = CBAM
-cbam_module.ChannelAttention = ChannelAttention
-cbam_module.SpatialAttention = SpatialAttention
+class CustomUnpickler(pickle.Unpickler):
+    def find_class(self, module, name):
+        if name == "CBAM":
+            return CBAM
+        if name == "ChannelAttention":
+            return ChannelAttention
+        if name == "SpatialAttention":
+            return SpatialAttention
+        return super().find_class(module, name)
 
-sys.modules["cbam"] = cbam_module
-sys.modules["models.common"] = cbam_module
-sys.modules["__main__"] = cbam_module
+
+def patched_load(file, *args, **kwargs):
+    kwargs["weights_only"] = False
+    with open(file, "rb") as f:
+        return CustomUnpickler(f).load()
+
 
 # ══════════════════════════════════════════════════════════════════════════════
-# IMPORT ULTRALYTICS AFTER CBAM REGISTRATION
+# IMPORT ULTRALYTICS
 # ══════════════════════════════════════════════════════════════════════════════
 
 import ultralytics
 from ultralytics import YOLO
 
+
+# Inject CBAM into ultralytics safely
 import ultralytics.nn.modules as _ult_modules
 import ultralytics.nn.modules.block as _ult_block
 import ultralytics.nn.tasks as _ult_tasks
 
-# Inject CBAM safely
 for _reg in (_ult_modules, _ult_block, _ult_tasks):
     setattr(_reg, "CBAM", CBAM)
     setattr(_reg, "ChannelAttention", ChannelAttention)
@@ -118,12 +126,8 @@ def load_model():
         st.error("Model file 'best_fixed.pt' not found.")
         st.stop()
 
+    # Patch torch.load
     original_load = torch.load
-
-    def patched_load(*args, **kwargs):
-        kwargs["weights_only"] = False
-        return original_load(*args, **kwargs)
-
     torch.load = patched_load
 
     try:
@@ -155,7 +159,7 @@ if uploaded_file:
 
     st.image(image, caption="Input Image", use_container_width=True)
 
-    with st.spinner("Detecting..."):
+    with st.spinner("Detecting objects..."):
         results = model.predict(img_array, conf=0.25, device="cpu")
 
     annotated = results[0].plot()[..., ::-1]
