@@ -34,7 +34,6 @@ venv.bak/
 # ── Model weights & checkpoints (too large for GitHub) ────────────────────────
 *.pt
 *.pth
-*.onnx
 *.tflite
 *.engine
 *.pkl
