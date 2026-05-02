@@ -13,7 +13,7 @@ import types
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# CBAM CLASSES (same as training file)
+# CBAM CLASSES
 # ══════════════════════════════════════════════════════════════════════════════
 
 class ChannelAttention(nn.Module):
@@ -31,9 +31,10 @@ class ChannelAttention(nn.Module):
         self.sigmoid = nn.Sigmoid()
 
     def forward(self, x):
-        avg_out = self.mlp(self.avg_pool(x))
-        max_out = self.mlp(self.max_pool(x))
-        return self.sigmoid(avg_out + max_out)
+        return self.sigmoid(
+            self.mlp(self.avg_pool(x)) +
+            self.mlp(self.max_pool(x))
+        )
 
 
 class SpatialAttention(nn.Module):
@@ -44,11 +45,10 @@ class SpatialAttention(nn.Module):
         self.sigmoid = nn.Sigmoid()
 
     def forward(self, x):
-        avg_out = torch.mean(x, dim=1, keepdim=True)
-        max_out, _ = torch.max(x, dim=1, keepdim=True)
-        x = torch.cat([avg_out, max_out], dim=1)
-        x = self.conv(x)
-        return self.sigmoid(x)
+        avg = torch.mean(x, dim=1, keepdim=True)
+        mx, _ = torch.max(x, dim=1, keepdim=True)
+        x = torch.cat([avg, mx], dim=1)
+        return self.sigmoid(self.conv(x))
 
 
 class CBAM(nn.Module):
@@ -64,7 +64,7 @@ class CBAM(nn.Module):
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# ✅ CRITICAL FIX: Register CBAM module for torch.load
+# SAFE CBAM REGISTRATION (for torch.load)
 # ══════════════════════════════════════════════════════════════════════════════
 
 cbam_module = types.ModuleType("cbam")
@@ -72,7 +72,6 @@ cbam_module.CBAM = CBAM
 cbam_module.ChannelAttention = ChannelAttention
 cbam_module.SpatialAttention = SpatialAttention
 
-# Only safe mappings (DO NOT override ultralytics modules)
 sys.modules["cbam"] = cbam_module
 sys.modules["models.common"] = cbam_module
 sys.modules["__main__"] = cbam_module
@@ -84,31 +83,19 @@ sys.modules["__main__"] = cbam_module
 
 from ultralytics import YOLO
 
-# Inject CBAM into ultralytics safely
+# Inject CBAM safely (no overriding)
 import ultralytics.nn.modules as _ult_modules
 import ultralytics.nn.modules.block as _ult_block
 import ultralytics.nn.tasks as _ult_tasks
 
-for _reg in (_ult_modules, _ult_block, _ult_tasks):
-    setattr(_reg, "CBAM", CBAM)
-    setattr(_reg, "ChannelAttention", ChannelAttention)
-    setattr(_reg, "SpatialAttention", SpatialAttention)
+for _mod in (_ult_modules, _ult_block, _ult_tasks):
+    setattr(_mod, "CBAM", CBAM)
+    setattr(_mod, "ChannelAttention", ChannelAttention)
+    setattr(_mod, "SpatialAttention", SpatialAttention)
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# CLASS INFO
-# ══════════════════════════════════════════════════════════════════════════════
-
-CLASS_INFO = {
-    0: {"name": "Comet", "description": "A small icy body with a glowing tail."},
-    1: {"name": "Galaxy", "description": "A massive system of stars and dark matter."},
-    2: {"name": "Globular Cluster", "description": "A dense cluster of old stars."},
-    3: {"name": "Nebula", "description": "A cloud where stars are formed."},
-}
-
-
-# ══════════════════════════════════════════════════════════════════════════════
-# MODEL LOADING (clean, no hacks)
+# MODEL LOADING (SAFE + FALLBACK)
 # ══════════════════════════════════════════════════════════════════════════════
 
 @st.cache_resource
@@ -116,10 +103,29 @@ def load_model():
     model_path = Path(__file__).parent / "best_fixed.pt"
 
     if not model_path.exists():
-        st.error("Model file 'best_fixed.pt' not found.")
+        st.error("Model file not found.")
         st.stop()
 
-    model = YOLO(str(model_path), task="detect")
+    original_load = torch.load
+
+    def safe_load(*args, **kwargs):
+        kwargs["map_location"] = "cpu"
+        try:
+            return original_load(*args, **kwargs)
+        except ModuleNotFoundError:
+            # fallback injection if model was saved with weird module path
+            sys.modules["cbam"] = sys.modules[__name__]
+            sys.modules["models.common"] = sys.modules[__name__]
+            sys.modules["__main__"] = sys.modules[__name__]
+            return original_load(*args, **kwargs)
+
+    torch.load = safe_load
+
+    try:
+        model = YOLO(str(model_path), task="detect")
+    finally:
+        torch.load = original_load
+
     return model
 
 
@@ -150,35 +156,16 @@ if uploaded_file:
     annotated = results[0].plot()[..., ::-1]
     st.image(annotated, caption="Detection Output", use_container_width=True)
 
-    st.divider()
     st.subheader("Detected Objects")
 
-    detected_data = [
-        (int(box.cls[0]), float(box.conf[0]))
-        for box in results[0].boxes
-    ]
+    detected = [(int(b.cls[0]), float(b.conf[0])) for b in results[0].boxes]
 
-    if detected_data:
-        counts = Counter(cls_id for cls_id, _ in detected_data)
+    if detected:
+        counts = Counter(cid for cid, _ in detected)
 
-        for cls_id, count in counts.items():
-            info = CLASS_INFO.get(cls_id, {
-                "name": model.names.get(cls_id, f"Class {cls_id}"),
-                "description": ""
-            })
-
-            confs = [c for cid, c in detected_data if cid == cls_id]
-
-            st.markdown(f"**{info['name']}** — {count} detected")
-            st.caption(
-                f"Avg confidence: {sum(confs)/len(confs):.2f} | "
-                f"Max confidence: {max(confs):.2f}"
-            )
-
-            if info["description"]:
-                st.caption(info["description"])
-
-        st.divider()
-        st.caption(f"Total objects detected: {len(detected_data)}")
+        for cid, count in counts.items():
+            confs = [c for i, c in detected if i == cid]
+            st.write(f"Class {cid}: {count} detected")
+            st.caption(f"Avg: {sum(confs)/len(confs):.2f} | Max: {max(confs):.2f}")
     else:
         st.info("No objects detected.")
