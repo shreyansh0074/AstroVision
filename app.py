@@ -1,37 +1,22 @@
-import os
-os.environ["TORCH_USE_RTLD_GLOBAL"] = "YES"
-
 import streamlit as st
 from PIL import Image
 import numpy as np
+from ultralytics import YOLO
 from pathlib import Path
 from collections import Counter
 
-# 🔥 IMPORTANT: import ultralytics normally
-from ultralytics import YOLO
-
-
-# ══════════════════════════════════════════════════════════════════════════════
-# MODEL LOADING (NO HACKS)
-# ══════════════════════════════════════════════════════════════════════════════
-
 @st.cache_resource
 def load_model():
-    model_path = Path(__file__).parent / "clean_model.pt"
+    model_path = Path(__file__).parent / "best_fixed.onnx"
 
     if not model_path.exists():
-        st.error("Model file 'clean_model.pt' not found.")
+        st.error("ONNX model not found.")
         st.stop()
 
-    return YOLO(str(model_path), task="detect")
+    return YOLO(str(model_path))
 
 
 model = load_model()
-
-
-# ══════════════════════════════════════════════════════════════════════════════
-# UI
-# ══════════════════════════════════════════════════════════════════════════════
 
 st.set_page_config(page_title="AstroVision", layout="centered")
 
@@ -48,7 +33,7 @@ if uploaded_file:
     st.image(image, caption="Input Image", use_container_width=True)
 
     with st.spinner("Detecting objects..."):
-        results = model.predict(img_array, conf=0.25, device="cpu")
+        results = model.predict(img_array, conf=0.25)
 
     annotated = results[0].plot()[..., ::-1]
     st.image(annotated, caption="Detection Output", use_container_width=True)
@@ -63,10 +48,7 @@ if uploaded_file:
         for cid, count in counts.items():
             confs = [c for i, c in detected if i == cid]
 
-            st.markdown(f"**Class {cid}** — {count} detected")
-            st.caption(
-                f"Avg confidence: {sum(confs)/len(confs):.2f} | "
-                f"Max confidence: {max(confs):.2f}"
-            )
+            st.write(f"Class {cid}: {count}")
+            st.caption(f"Avg: {sum(confs)/len(confs):.2f} | Max: {max(confs):.2f}")
     else:
         st.info("No objects detected.")
