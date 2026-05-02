@@ -100,7 +100,7 @@ for _mod in (_ult_modules, _ult_block, _ult_tasks):
 
 @st.cache_resource
 def load_model():
-    model_path = Path(__file__).parent / "best_fixed.pt"
+    model_path = Path(__file__).parent / "clean_model.pt"
 
     if not model_path.exists():
         st.error("Model file not found.")
